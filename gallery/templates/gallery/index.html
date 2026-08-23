@@ -1,0 +1,52 @@
+{% load static %}
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Photo Gallery</title>
+  <link rel="stylesheet" href="{% static 'gallery/css/style.css' %}">
+</head>
+<body>
+  <header class="site-header">
+    <h1>Photo Gallery</h1>
+    <p class="subtitle">Upload a photo with a description &mdash; served through CloudFront.</p>
+  </header>
+
+  <main>
+    {% if messages %}
+      <ul class="messages">
+        {% for message in messages %}
+          <li class="message {{ message.tags }}">{{ message }}</li>
+        {% endfor %}
+      </ul>
+    {% endif %}
+
+    <section class="upload-card">
+      <form method="post" enctype="multipart/form-data" action="{% url 'gallery-upload' %}">
+        {% csrf_token %}
+        <div class="field">
+          {{ form.image.label_tag }}
+          {{ form.image }}
+        </div>
+        <div class="field">
+          {{ form.description.label_tag }}
+          {{ form.description }}
+        </div>
+        <button type="submit">Upload</button>
+      </form>
+    </section>
+
+    <section class="grid">
+      {% for photo in photos %}
+        <figure class="card">
+          <img src="{{ photo.image.url }}" alt="{{ photo.description }}" loading="lazy">
+          <figcaption>{{ photo.description }}</figcaption>
+        </figure>
+      {% empty %}
+        <p class="empty">No photos yet &mdash; be the first to upload one.</p>
+      {% endfor %}
+    </section>
+  </main>
+</body>
+</html>

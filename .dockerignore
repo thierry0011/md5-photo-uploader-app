@@ -1,0 +1,16 @@
+.git
+.github
+.gitignore
+.env
+.env.example
+__pycache__
+*.pyc
+.venv
+venv
+db.sqlite3
+staticfiles
+media
+README.md
+tests
+**/tests.py
+.pytest_cache
