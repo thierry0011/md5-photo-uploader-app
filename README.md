@@ -43,30 +43,48 @@ These values only exist once the infra repo's stacks are deployed. Fill them
 in once, commit, and the pipeline is fully automatic from then on.
 
 1. **`.github/workflows/build-and-push.yml`**: set `AWS_ROLE_ARN` to the
-   `GitHubActionsRoleArn` output of the infra repo's `06-github-oidc.yaml`
-   stack, and `AWS_REGION` to match wherever you deployed.
+   `GitHubActionsRoleArn` output of the infra repo's root stack, and
+   `AWS_REGION` to match wherever you deployed.
 
    ```bash
-   aws cloudformation list-exports \
-     --query "Exports[?Name=='photo-gallery-dev-GitHubActionsRoleArn'].Value" --output text
+   aws cloudformation describe-stacks --stack-name photo-gallery-dev-root \
+     --query "Stacks[0].Outputs[?OutputKey=='GitHubActionsRoleArn'].OutputValue" --output text
    ```
 
-2. **`ecs/taskdef.json`**: replace the `<PLACEHOLDER>` values using the
-   corresponding infra stack outputs:
+2. **`ecs/taskdef.json` is generated — never edit it by hand.** The source
+   of truth is `ecs/taskdef.template.json`, which the `build-and-push.yml`
+   workflow renders into `ecs/taskdef.json` on every run (via `envsubst`)
+   and commits back before pushing the image, so CodePipeline's git-sourced
+   deploy input is always current. Deterministic values (account ID,
+   region, the images bucket name, both ECS role ARNs — none of these carry
+   an AWS-generated random suffix) are hardcoded as plain `env:` values at
+   the top of the workflow file already. The four that *do* carry a random
+   suffix, and so change if their resource is ever recreated, must be set
+   as **repository secrets** (Settings → Secrets and variables → Actions)
+   instead of committed literally:
 
-   | Placeholder | Source export name |
+   | Secret | Source |
    |---|---|
-   | `<AWS_ACCOUNT_ID>` | your account ID (`aws sts get-caller-identity`) |
-   | `<AWS_REGION>` | the region you deployed to |
-   | `<IMAGES_BUCKET_NAME>` | `photo-gallery-dev-ImagesBucketName` |
-   | `<CLOUDFRONT_DOMAIN_NAME>` | `photo-gallery-dev-CloudFrontDomainName` |
-   | `<DB_ENDPOINT_ADDRESS>` | `photo-gallery-dev-DBEndpointAddress` |
-   | `<DB_CREDENTIALS_SECRET_ARN>` | `photo-gallery-dev-DBCredentialsSecretArn` |
-   | `<DJANGO_SECRET_KEY_SECRET_ARN>` | the ARN of the `photo-gallery-dev-django-secret-key` secret (Secrets Manager console/CLI) |
+   | `CLOUDFRONT_DOMAIN_NAME` | infra root stack output `CloudFrontDomainName` |
+   | `DB_ENDPOINT_ADDRESS` | `DatabaseStack` nested-stack output `DBInstanceEndpointAddress` (query that nested stack directly - not surfaced at the root level) |
+   | `DB_CREDENTIALS_SECRET_ARN` | Secrets Manager console/CLI: ARN of the `photo-gallery-dev-db-credentials` secret |
+   | `DJANGO_SECRET_KEY_SECRET_ARN` | Secrets Manager console/CLI: ARN of the `photo-gallery-dev-django-secret-key` secret |
 
-   `<IMAGE1_NAME>` is **not** a placeholder to fill in — CodePipeline
-   substitutes it automatically with the freshly-pushed image URI on every
-   deployment. Leave it exactly as-is.
+   ```bash
+   aws cloudformation describe-stacks --stack-name photo-gallery-dev-root \
+     --query "Stacks[0].Outputs[?OutputKey=='CloudFrontDomainName'].OutputValue" --output text
+   ```
+
+   Update these secrets whenever the underlying resource is recreated (e.g.
+   after an RDS replacement) — the next workflow run re-renders
+   `ecs/taskdef.json` from the current secret values automatically, no
+   manual file editing required.
+
+   `<IMAGE1_NAME>` in the template (and `<TASK_DEFINITION>` in
+   `appspec.yaml`) are **not** placeholders to fill in — `envsubst` only
+   touches `$VAR`/`${VAR}` syntax, so these angle-bracket tokens pass
+   through untouched for CodeDeploy to substitute itself at deploy time.
+   Leave them exactly as-is.
 
 3. Push both files to `main`. The pipeline will pick up `ecs/taskdef.json`
    and `ecs/appspec.yaml` on its next run.

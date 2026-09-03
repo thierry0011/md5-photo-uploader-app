@@ -5,18 +5,25 @@ on:
     branches: [main]
     paths-ignore:
       - "README.md"
-      - "ecs/**"
+      # Only the generated file, not the whole ecs/ dir - editing
+      # taskdef.template.json or appspec.yaml must still trigger a build.
+      - "ecs/taskdef.json"
   workflow_dispatch: {}
 
 permissions:
   id-token: write   # required for OIDC federation to AWS
-  contents: read
+  contents: write   # required to commit the rendered ecs/taskdef.json back
 
 env:
   AWS_REGION: us-east-1
   # ARN output by the infra repo's 06-github-oidc.yaml stack.
-  AWS_ROLE_ARN: arn:aws:iam::<AWS_ACCOUNT_ID>:role/photo-gallery-dev-github-actions-ecr-push
+  AWS_ROLE_ARN: arn:aws:iam::711387109786:role/photo-gallery-dev-github-actions-ecr-push
   ECR_REPOSITORY: photo-gallery-dev-app
+  # Deterministic values (account ID / region / resource name all fixed,
+  # no AWS-generated random suffix) - safe as plain env vars, not secrets.
+  TASK_EXECUTION_ROLE_ARN: arn:aws:iam::711387109786:role/photo-gallery-dev-ecs-task-execution
+  TASK_ROLE_ARN: arn:aws:iam::711387109786:role/photo-gallery-dev-ecs-task-role
+  IMAGES_BUCKET_NAME: photo-gallery-dev-images-711387109786
 
 jobs:
   test:
@@ -52,6 +59,35 @@ jobs:
       - name: Log in to Amazon ECR
         id: ecr-login
         uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Render ecs/taskdef.json from the template
+        env:
+          # Volatile - carry an AWS-generated random suffix, so they live in
+          # secrets (Settings -> Secrets and variables -> Actions) instead
+          # of being committed literally. Set/update these once the infra
+          # stack's resources exist and are stable.
+          CLOUDFRONT_DOMAIN_NAME: ${{ secrets.CLOUDFRONT_DOMAIN_NAME }}
+          DB_ENDPOINT_ADDRESS: ${{ secrets.DB_ENDPOINT_ADDRESS }}
+          DB_CREDENTIALS_SECRET_ARN: ${{ secrets.DB_CREDENTIALS_SECRET_ARN }}
+          DJANGO_SECRET_KEY_SECRET_ARN: ${{ secrets.DJANGO_SECRET_KEY_SECRET_ARN }}
+        run: |
+          sudo apt-get update -qq && sudo apt-get install -y -qq gettext-base
+          envsubst < ecs/taskdef.template.json > ecs/taskdef.json
+
+      - name: Commit rendered taskdef.json if it changed
+        run: |
+          if git diff --quiet --exit-code -- ecs/taskdef.json; then
+            echo "No changes to ecs/taskdef.json - nothing to commit."
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add ecs/taskdef.json
+          git commit -m "chore: render ecs/taskdef.json [skip ci]"
+          git push
+        # Committed and pushed *before* the ECR push below, so CodePipeline's
+        # git-sourced AppSource action never reads a taskdef.json older than
+        # the image it's about to deploy.
 
       - name: Build, tag and push image
         env:

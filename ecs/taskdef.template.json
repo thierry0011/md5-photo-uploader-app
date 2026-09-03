@@ -4,8 +4,8 @@
   "requiresCompatibilities": ["FARGATE"],
   "cpu": "512",
   "memory": "1024",
-  "executionRoleArn": "arn:aws:iam::711387109786:role/photo-gallery-dev-ecs-task-execution",
-  "taskRoleArn": "arn:aws:iam::711387109786:role/photo-gallery-dev-ecs-task-role",
+  "executionRoleArn": "${TASK_EXECUTION_ROLE_ARN}",
+  "taskRoleArn": "${TASK_ROLE_ARN}",
   "runtimePlatform": {
     "cpuArchitecture": "X86_64",
     "operatingSystemFamily": "LINUX"
@@ -23,23 +23,23 @@
       ],
       "environment": [
         { "name": "DJANGO_ALLOWED_HOSTS", "value": "*" },
-        { "name": "AWS_STORAGE_BUCKET_NAME", "value": "photo-gallery-dev-images-711387109786" },
-        { "name": "AWS_CLOUDFRONT_DOMAIN", "value": "<CLOUDFRONT_DOMAIN_NAME>" },
-        { "name": "AWS_REGION", "value": "us-east-1" },
-        { "name": "POSTGRES_HOST", "value": "<DB_ENDPOINT_ADDRESS>" },
+        { "name": "AWS_STORAGE_BUCKET_NAME", "value": "${IMAGES_BUCKET_NAME}" },
+        { "name": "AWS_CLOUDFRONT_DOMAIN", "value": "${CLOUDFRONT_DOMAIN_NAME}" },
+        { "name": "AWS_REGION", "value": "${AWS_REGION}" },
+        { "name": "POSTGRES_HOST", "value": "${DB_ENDPOINT_ADDRESS}" },
         { "name": "POSTGRES_PORT", "value": "5432" },
         { "name": "POSTGRES_DB", "value": "photogallery" }
       ],
       "secrets": [
-        { "name": "POSTGRES_USER", "valueFrom": "<DB_CREDENTIALS_SECRET_ARN>:username::" },
-        { "name": "POSTGRES_PASSWORD", "valueFrom": "<DB_CREDENTIALS_SECRET_ARN>:password::" },
-        { "name": "DJANGO_SECRET_KEY", "valueFrom": "<DJANGO_SECRET_KEY_SECRET_ARN>:SECRET_KEY::" }
+        { "name": "POSTGRES_USER", "valueFrom": "${DB_CREDENTIALS_SECRET_ARN}:username::" },
+        { "name": "POSTGRES_PASSWORD", "valueFrom": "${DB_CREDENTIALS_SECRET_ARN}:password::" },
+        { "name": "DJANGO_SECRET_KEY", "valueFrom": "${DJANGO_SECRET_KEY_SECRET_ARN}:SECRET_KEY::" }
       ],
       "logConfiguration": {
         "logDriver": "awslogs",
         "options": {
           "awslogs-group": "/ecs/photo-gallery-dev",
-          "awslogs-region": "us-east-1",
+          "awslogs-region": "${AWS_REGION}",
           "awslogs-stream-prefix": "app"
         }
       }
