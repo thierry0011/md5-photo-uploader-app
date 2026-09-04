@@ -55,30 +55,21 @@ in once, commit, and the pipeline is fully automatic from then on.
    of truth is `ecs/taskdef.template.json`, which the `build-and-push.yml`
    workflow renders into `ecs/taskdef.json` on every run (via `envsubst`)
    and commits back before pushing the image, so CodePipeline's git-sourced
-   deploy input is always current. Deterministic values (account ID,
-   region, the images bucket name, both ECS role ARNs — none of these carry
-   an AWS-generated random suffix) are hardcoded as plain `env:` values at
-   the top of the workflow file already. The four that *do* carry a random
-   suffix, and so change if their resource is ever recreated, must be set
-   as **repository secrets** (Settings → Secrets and variables → Actions)
-   instead of committed literally:
+   deploy input is always current.
 
-   | Secret | Source |
-   |---|---|
-   | `CLOUDFRONT_DOMAIN_NAME` | infra root stack output `CloudFrontDomainName` |
-   | `DB_ENDPOINT_ADDRESS` | `DatabaseStack` nested-stack output `DBInstanceEndpointAddress` (query that nested stack directly - not surfaced at the root level) |
-   | `DB_CREDENTIALS_SECRET_ARN` | Secrets Manager console/CLI: ARN of the `photo-gallery-dev-db-credentials` secret |
-   | `DJANGO_SECRET_KEY_SECRET_ARN` | Secrets Manager console/CLI: ARN of the `photo-gallery-dev-django-secret-key` secret |
-
-   ```bash
-   aws cloudformation describe-stacks --stack-name photo-gallery-dev-root \
-     --query "Stacks[0].Outputs[?OutputKey=='CloudFrontDomainName'].OutputValue" --output text
-   ```
-
-   Update these secrets whenever the underlying resource is recreated (e.g.
-   after an RDS replacement) — the next workflow run re-renders
-   `ecs/taskdef.json` from the current secret values automatically, no
-   manual file editing required.
+   No repository secrets to set or maintain for this. Deterministic values
+   (account ID, region, the images bucket name, both ECS role ARNs — none
+   of these carry an AWS-generated random suffix) are hardcoded as plain
+   `env:` values at the top of the workflow file. The four that *do* carry
+   a random suffix — `CloudFrontDomainName`, the RDS endpoint, and both
+   Secrets Manager ARNs — are looked up live from AWS on every run (via the
+   workflow's existing OIDC role, which has read-only
+   `cloudformation:DescribeStacks`/`DescribeStackResource` and
+   `secretsmanager:DescribeSecret` for exactly this), so there's nothing to
+   go stale or re-copy even if the infra is torn down and rebuilt with all
+   new random suffixes. If a lookup ever comes back empty, the workflow
+   fails loudly at that step instead of silently rendering a broken
+   `taskdef.json`.
 
    `<IMAGE1_NAME>` in the template (and `<TASK_DEFINITION>` in
    `appspec.yaml`) are **not** placeholders to fill in — `envsubst` only

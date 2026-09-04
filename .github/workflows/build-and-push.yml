@@ -19,6 +19,9 @@ env:
   # ARN output by the infra repo's 06-github-oidc.yaml stack.
   AWS_ROLE_ARN: arn:aws:iam::711387109786:role/photo-gallery-dev-github-actions-ecr-push
   ECR_REPOSITORY: photo-gallery-dev-app
+  ROOT_STACK_NAME: photo-gallery-dev-root
+  DB_CREDENTIALS_SECRET_NAME: photo-gallery-dev-db-credentials
+  DJANGO_SECRET_KEY_SECRET_NAME: photo-gallery-dev-django-secret-key
   # Deterministic values (account ID / region / resource name all fixed,
   # no AWS-generated random suffix) - safe as plain env vars, not secrets.
   TASK_EXECUTION_ROLE_ARN: arn:aws:iam::711387109786:role/photo-gallery-dev-ecs-task-execution
@@ -60,16 +63,49 @@ jobs:
         id: ecr-login
         uses: aws-actions/amazon-ecr-login@v2
 
+      - name: Look up live infra values
+        # No GitHub Secrets for these - they carry an AWS-generated random
+        # suffix that changes every time their resource is recreated (e.g.
+        # tearing the lab down and rebuilding it later), so a copied value
+        # goes stale silently. Querying AWS directly here, every run, means
+        # there's nothing to ever go stale or re-copy by hand.
+        run: |
+          set -euo pipefail
+
+          cloudfront_domain=$(aws cloudformation describe-stacks \
+            --stack-name "$ROOT_STACK_NAME" \
+            --query "Stacks[0].Outputs[?OutputKey=='CloudFrontDomainName'].OutputValue" \
+            --output text)
+
+          db_stack_arn=$(aws cloudformation describe-stack-resource \
+            --stack-name "$ROOT_STACK_NAME" --logical-resource-id DatabaseStack \
+            --query "StackResourceDetail.PhysicalResourceId" --output text)
+          db_endpoint=$(aws cloudformation describe-stacks \
+            --stack-name "$db_stack_arn" \
+            --query "Stacks[0].Outputs[?OutputKey=='DBInstanceEndpointAddress'].OutputValue" \
+            --output text)
+
+          db_secret_arn=$(aws secretsmanager describe-secret \
+            --secret-id "$DB_CREDENTIALS_SECRET_NAME" --query ARN --output text)
+          django_secret_arn=$(aws secretsmanager describe-secret \
+            --secret-id "$DJANGO_SECRET_KEY_SECRET_NAME" --query ARN --output text)
+
+          for name_value in "CloudFrontDomainName=$cloudfront_domain" "DBEndpointAddress=$db_endpoint" \
+                             "DBCredentialsSecretArn=$db_secret_arn" "DjangoSecretKeyArn=$django_secret_arn"; do
+            name="${name_value%%=*}"
+            value="${name_value#*=}"
+            if [ -z "$value" ] || [ "$value" = "None" ]; then
+              echo "::error::Looked-up value for $name came back empty - refusing to render a broken taskdef.json."
+              exit 1
+            fi
+          done
+
+          echo "CLOUDFRONT_DOMAIN_NAME=$cloudfront_domain" >> "$GITHUB_ENV"
+          echo "DB_ENDPOINT_ADDRESS=$db_endpoint" >> "$GITHUB_ENV"
+          echo "DB_CREDENTIALS_SECRET_ARN=$db_secret_arn" >> "$GITHUB_ENV"
+          echo "DJANGO_SECRET_KEY_SECRET_ARN=$django_secret_arn" >> "$GITHUB_ENV"
+
       - name: Render ecs/taskdef.json from the template
-        env:
-          # Volatile - carry an AWS-generated random suffix, so they live in
-          # secrets (Settings -> Secrets and variables -> Actions) instead
-          # of being committed literally. Set/update these once the infra
-          # stack's resources exist and are stable.
-          CLOUDFRONT_DOMAIN_NAME: ${{ secrets.CLOUDFRONT_DOMAIN_NAME }}
-          DB_ENDPOINT_ADDRESS: ${{ secrets.DB_ENDPOINT_ADDRESS }}
-          DB_CREDENTIALS_SECRET_ARN: ${{ secrets.DB_CREDENTIALS_SECRET_ARN }}
-          DJANGO_SECRET_KEY_SECRET_ARN: ${{ secrets.DJANGO_SECRET_KEY_SECRET_ARN }}
         run: |
           sudo apt-get update -qq && sudo apt-get install -y -qq gettext-base
           envsubst < ecs/taskdef.template.json > ecs/taskdef.json
