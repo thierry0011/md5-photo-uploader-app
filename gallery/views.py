@@ -1,6 +1,7 @@
 from django.contrib import messages
 from django.http import JsonResponse
-from django.shortcuts import redirect, render
+from django.shortcuts import get_object_or_404, redirect, render
+from django.views.decorators.http import require_POST
 
 from .forms import PhotoUploadForm
 from .models import Photo
@@ -24,6 +25,15 @@ def upload_photo(request):
             for error in errors:
                 messages.error(request, f"{field}: {error}")
 
+    return redirect("gallery-index")
+
+
+@require_POST
+def delete_photo(request, pk):
+    photo = get_object_or_404(Photo, pk=pk)
+    photo.image.delete(save=False)  # removes the S3/local object, not just the DB row
+    photo.delete()
+    messages.success(request, "Photo deleted.")
     return redirect("gallery-index")
 
 

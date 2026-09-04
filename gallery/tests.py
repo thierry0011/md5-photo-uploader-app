@@ -57,3 +57,37 @@ class UploadViewTests(TestCase):
         from .models import Photo
 
         self.assertEqual(Photo.objects.count(), 1)
+
+
+class DeleteViewTests(TestCase):
+    def test_delete_removes_photo_and_redirects(self):
+        from .models import Photo
+
+        self.client.post(
+            reverse("gallery-upload"),
+            data={"description": "A red square", "image": make_uploaded_image()},
+        )
+        photo = Photo.objects.get()
+
+        response = self.client.post(reverse("gallery-delete", args=[photo.pk]))
+
+        self.assertRedirects(response, reverse("gallery-index"))
+        self.assertEqual(Photo.objects.count(), 0)
+
+    def test_delete_requires_post(self):
+        from .models import Photo
+
+        self.client.post(
+            reverse("gallery-upload"),
+            data={"description": "A red square", "image": make_uploaded_image()},
+        )
+        photo = Photo.objects.get()
+
+        response = self.client.get(reverse("gallery-delete", args=[photo.pk]))
+
+        self.assertEqual(response.status_code, 405)
+        self.assertEqual(Photo.objects.count(), 1)
+
+    def test_delete_unknown_photo_returns_404(self):
+        response = self.client.post(reverse("gallery-delete", args=[999]))
+        self.assertEqual(response.status_code, 404)
