@@ -5,14 +5,11 @@ on:
     branches: [main]
     paths-ignore:
       - "README.md"
-      # Only the generated file, not the whole ecs/ dir - editing
-      # taskdef.template.json or appspec.yaml must still trigger a build.
-      - "ecs/taskdef.json"
   workflow_dispatch: {}
 
 permissions:
   id-token: write   # required for OIDC federation to AWS
-  contents: write   # required to commit the rendered ecs/taskdef.json back
+  contents: read
 
 env:
   AWS_REGION: us-east-1
@@ -21,7 +18,8 @@ env:
   ECR_REPOSITORY: photo-gallery-dev-app
   ROOT_STACK_NAME: photo-gallery-dev-root
   DB_CREDENTIALS_SECRET_NAME: photo-gallery-dev-db-credentials
-  DJANGO_SECRET_KEY_SECRET_NAME: photo-gallery-dev-django-secret-key
+  DJANGO_SECRET_KEY_PARAM_NAME: photo-gallery-dev-django-secret-key
+  ARTIFACT_KEY: source/appspec-taskdef.zip
   # Deterministic values (account ID / region / resource name all fixed,
   # no AWS-generated random suffix) - safe as plain env vars, not secrets.
   TASK_EXECUTION_ROLE_ARN: arn:aws:iam::711387109786:role/photo-gallery-dev-ecs-task-execution
@@ -77,6 +75,11 @@ jobs:
             --query "Stacks[0].Outputs[?OutputKey=='CloudFrontDomainName'].OutputValue" \
             --output text)
 
+          artifact_bucket=$(aws cloudformation describe-stacks \
+            --stack-name "$ROOT_STACK_NAME" \
+            --query "Stacks[0].Outputs[?OutputKey=='PipelineArtifactBucketName'].OutputValue" \
+            --output text)
+
           db_stack_arn=$(aws cloudformation describe-stack-resource \
             --stack-name "$ROOT_STACK_NAME" --logical-resource-id DatabaseStack \
             --query "StackResourceDetail.PhysicalResourceId" --output text)
@@ -87,11 +90,16 @@ jobs:
 
           db_secret_arn=$(aws secretsmanager describe-secret \
             --secret-id "$DB_CREDENTIALS_SECRET_NAME" --query ARN --output text)
-          django_secret_arn=$(aws secretsmanager describe-secret \
-            --secret-id "$DJANGO_SECRET_KEY_SECRET_NAME" --query ARN --output text)
+          # SecureString in Parameter Store, not Secrets Manager - see
+          # 07-ecs-alb.yaml's TaskExecutionRole for why. get-parameter here
+          # only reads metadata (the ARN), no --with-decryption, so this
+          # role never touches the actual secret value.
+          django_secret_arn=$(aws ssm get-parameter \
+            --name "$DJANGO_SECRET_KEY_PARAM_NAME" --query Parameter.ARN --output text)
 
-          for name_value in "CloudFrontDomainName=$cloudfront_domain" "DBEndpointAddress=$db_endpoint" \
-                             "DBCredentialsSecretArn=$db_secret_arn" "DjangoSecretKeyArn=$django_secret_arn"; do
+          for name_value in "CloudFrontDomainName=$cloudfront_domain" "PipelineArtifactBucketName=$artifact_bucket" \
+                             "DBEndpointAddress=$db_endpoint" "DBCredentialsSecretArn=$db_secret_arn" \
+                             "DjangoSecretKeyArn=$django_secret_arn"; do
             name="${name_value%%=*}"
             value="${name_value#*=}"
             if [ -z "$value" ] || [ "$value" = "None" ]; then
@@ -101,35 +109,54 @@ jobs:
           done
 
           echo "CLOUDFRONT_DOMAIN_NAME=$cloudfront_domain" >> "$GITHUB_ENV"
+          echo "ARTIFACT_BUCKET=$artifact_bucket" >> "$GITHUB_ENV"
           echo "DB_ENDPOINT_ADDRESS=$db_endpoint" >> "$GITHUB_ENV"
           echo "DB_CREDENTIALS_SECRET_ARN=$db_secret_arn" >> "$GITHUB_ENV"
-          echo "DJANGO_SECRET_KEY_SECRET_ARN=$django_secret_arn" >> "$GITHUB_ENV"
+          echo "DJANGO_SECRET_KEY_ARN=$django_secret_arn" >> "$GITHUB_ENV"
 
-      - name: Render ecs/taskdef.json from the template
-        run: |
-          sudo apt-get update -qq && sudo apt-get install -y -qq gettext-base
-          envsubst < ecs/taskdef.template.json > ecs/taskdef.json
-
-      - name: Commit rendered taskdef.json if it changed
-        run: |
-          if git diff --quiet --exit-code -- ecs/taskdef.json; then
-            echo "No changes to ecs/taskdef.json - nothing to commit."
-            exit 0
-          fi
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add ecs/taskdef.json
-          git commit -m "chore: render ecs/taskdef.json [skip ci]"
-          git push
-        # Committed and pushed *before* the ECR push below, so CodePipeline's
-        # git-sourced AppSource action never reads a taskdef.json older than
-        # the image it's about to deploy.
-
-      - name: Build, tag and push image
+      - name: Build and push image
         env:
           REGISTRY: ${{ steps.ecr-login.outputs.registry }}
-          IMAGE_TAG: ${{ github.sha }}
         run: |
-          docker build -t "$REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG" -t "$REGISTRY/$ECR_REPOSITORY:latest" .
-          docker push "$REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG"
+          docker build -t "$REGISTRY/$ECR_REPOSITORY:latest" .
           docker push "$REGISTRY/$ECR_REPOSITORY:latest"
+
+      # ':latest' is mutable by design (kept for convenience, e.g. manual
+      # `docker pull`), so it's never what actually gets deployed. Instead,
+      # once the push above lands, ask ECR what digest 'latest' resolved to
+      # *this run* and bake that fixed digest into the task definition -
+      # every task launched from the resulting revision (initial rollout,
+      # later autoscaling, crash-replacement) pulls these exact bytes,
+      # regardless of what 'latest' is repointed to afterward.
+      - name: Resolve pushed image digest
+        env:
+          REGISTRY: ${{ steps.ecr-login.outputs.registry }}
+        run: |
+          set -euo pipefail
+          image_digest=$(aws ecr describe-images \
+            --repository-name "$ECR_REPOSITORY" \
+            --image-ids imageTag=latest \
+            --query 'imageDetails[0].imageDigest' --output text)
+          echo "IMAGE_URI=${REGISTRY}/${ECR_REPOSITORY}@${image_digest}" >> "$GITHUB_ENV"
+
+      - name: Render deploy artifact (taskdef.json + appspec.yaml)
+        run: |
+          sudo apt-get update -qq && sudo apt-get install -y -qq gettext-base
+          mkdir -p dist
+          envsubst < ecs/taskdef.template.json > dist/taskdef.json
+          cp ecs/appspec.yaml dist/appspec.yaml
+          cd dist && zip -r ../appspec-taskdef.zip taskdef.json appspec.yaml
+
+      # This is the actual deploy trigger: 09-cicd-pipeline.yaml's
+      # EventBridge rule starts CodePipeline off this S3 write, not off the
+      # ECR push above - by the time this object lands, the image it
+      # references is already fully pushed, so the pipeline can never read
+      # a deploy artifact whose image isn't there yet.
+      - name: Upload deploy artifact to S3
+        run: |
+          aws s3 cp appspec-taskdef.zip "s3://${ARTIFACT_BUCKET}/${ARTIFACT_KEY}"
+
+      - name: Summary
+        run: |
+          echo "Deployed image: ${IMAGE_URI}" >> "$GITHUB_STEP_SUMMARY"
+          echo "This S3 upload triggers EventBridge -> CodePipeline -> CodeDeploy blue/green deployment." >> "$GITHUB_STEP_SUMMARY"

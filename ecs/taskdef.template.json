@@ -13,7 +13,7 @@
   "containerDefinitions": [
     {
       "name": "app",
-      "image": "<IMAGE1_NAME>",
+      "image": "${IMAGE_URI}",
       "essential": true,
       "portMappings": [
         {
@@ -33,7 +33,7 @@
       "secrets": [
         { "name": "POSTGRES_USER", "valueFrom": "${DB_CREDENTIALS_SECRET_ARN}:username::" },
         { "name": "POSTGRES_PASSWORD", "valueFrom": "${DB_CREDENTIALS_SECRET_ARN}:password::" },
-        { "name": "DJANGO_SECRET_KEY", "valueFrom": "${DJANGO_SECRET_KEY_SECRET_ARN}:SECRET_KEY::" }
+        { "name": "DJANGO_SECRET_KEY", "valueFrom": "${DJANGO_SECRET_KEY_ARN}" }
       ],
       "logConfiguration": {
         "logDriver": "awslogs",

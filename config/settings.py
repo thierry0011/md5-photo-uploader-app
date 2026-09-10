@@ -2,10 +2,10 @@
 Django settings for the Photo Gallery app.
 
 Every environment-specific value is read from an environment variable so the
-same image runs unmodified in ECS. In the ECS task definition, POSTGRES_USER,
-POSTGRES_PASSWORD and DJANGO_SECRET_KEY are injected from Secrets Manager via
-the task definition's `secrets` block; everything else is a plain `environment`
-entry.
+same image runs unmodified in ECS. In the ECS task definition, POSTGRES_USER
+and POSTGRES_PASSWORD are injected from Secrets Manager, and DJANGO_SECRET_KEY
+from a Parameter Store SecureString, via the task definition's `secrets`
+block; everything else is a plain `environment` entry.
 """
 
 import os
