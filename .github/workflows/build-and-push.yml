@@ -20,8 +20,6 @@ env:
   DB_CREDENTIALS_SECRET_NAME: photo-gallery-dev-db-credentials
   DJANGO_SECRET_KEY_PARAM_NAME: photo-gallery-dev-django-secret-key
   ARTIFACT_KEY: source/appspec-taskdef.zip
-  # Deterministic values (account ID / region / resource name all fixed,
-  # no AWS-generated random suffix) - safe as plain env vars, not secrets.
   TASK_EXECUTION_ROLE_ARN: arn:aws:iam::711387109786:role/photo-gallery-dev-ecs-task-execution
   TASK_ROLE_ARN: arn:aws:iam::711387109786:role/photo-gallery-dev-ecs-task-role
   IMAGES_BUCKET_NAME: photo-gallery-dev-images-711387109786
@@ -62,11 +60,6 @@ jobs:
         uses: aws-actions/amazon-ecr-login@v2
 
       - name: Look up live infra values
-        # No GitHub Secrets for these - they carry an AWS-generated random
-        # suffix that changes every time their resource is recreated (e.g.
-        # tearing the lab down and rebuilding it later), so a copied value
-        # goes stale silently. Querying AWS directly here, every run, means
-        # there's nothing to ever go stale or re-copy by hand.
         run: |
           set -euo pipefail
 
