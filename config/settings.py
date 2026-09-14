@@ -103,10 +103,7 @@ STATIC_ROOT = BASE_DIR / "staticfiles"
 
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 
-# ---------------------------------------------------------------------------
-# Storage: photo uploads go to S3 (served through CloudFront); static assets
-# are baked into the image at build time and served by WhiteNoise.
-# ---------------------------------------------------------------------------
+# Storage: photo uploads go to S3 (served via CloudFront); static assets are baked in and served by WhiteNoise
 AWS_STORAGE_BUCKET_NAME = os.environ.get("AWS_STORAGE_BUCKET_NAME", "")
 AWS_S3_REGION_NAME = os.environ.get("AWS_REGION", "us-east-1")
 AWS_CLOUDFRONT_DOMAIN = os.environ.get("AWS_CLOUDFRONT_DOMAIN", "")

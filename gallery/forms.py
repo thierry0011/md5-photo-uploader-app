@@ -36,10 +36,7 @@ class PhotoUploadForm(forms.ModelForm):
         return self._resize_and_compress(image)
 
     def _resize_and_compress(self, image):
-        # Client-uploaded photos are often full-resolution camera originals
-        # (several MB) - stored/served at that size they make the gallery
-        # grid painfully slow to load. Downscale + re-encode once here so
-        # every future page load only ever transfers the smaller version.
+        # Downscale + re-encode once here so full-res camera originals don't slow down every gallery page load
         with Image.open(image) as img:
             img = ImageOps.exif_transpose(img)  # bake in rotation before EXIF is dropped
             img.thumbnail((MAX_DIMENSION, MAX_DIMENSION), Image.LANCZOS)

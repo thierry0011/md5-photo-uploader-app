@@ -42,51 +42,47 @@ flake8 .
 These values only exist once the infra repo's stacks are deployed. Fill them
 in once, commit, and the pipeline is fully automatic from then on.
 
-1. **`.github/workflows/build-and-push.yml`**: set `AWS_ROLE_ARN` to the
-   `GitHubActionsRoleArn` output of the infra repo's root stack, and
-   `AWS_REGION` to match wherever you deployed.
+1. Add one **repository secret** (Settings → Secrets and variables → Actions
+   → *Secrets*): `AWS_ROLE_ARN` ← the infra repo's `ecr.yaml` stack's
+   `GitHubActionsRoleArn` output.
 
    ```bash
-   aws cloudformation describe-stacks --stack-name photo-gallery-dev-root \
+   aws cloudformation describe-stacks --stack-name photo-gallery-dev-ecr \
      --query "Stacks[0].Outputs[?OutputKey=='GitHubActionsRoleArn'].OutputValue" --output text
    ```
 
-2. **`ecs/taskdef.json` is generated — never edit it by hand.** The source
-   of truth is `ecs/taskdef.template.json`, which the `build-and-push.yml`
-   workflow renders into `ecs/taskdef.json` on every run (via `envsubst`)
-   and commits back before pushing the image, so CodePipeline's git-sourced
-   deploy input is always current.
+2. Add these as **repository variables** instead (same Settings page →
+   *Variables*): `AWS_REGION`, `ECR_REPOSITORY` (`photo-gallery-dev-app`),
+   `ARTIFACT_KEY` (`source/appspec-taskdef.zip`), `ARTIFACT_BUCKET`.
 
-   No repository secrets to set or maintain for this. Deterministic values
-   (account ID, region, the images bucket name, both ECS role ARNs — none
-   of these carry an AWS-generated random suffix) are hardcoded as plain
-   `env:` values at the top of the workflow file. The four that *do* carry
-   a random suffix — `CloudFrontDomainName`, the RDS endpoint, and both
-   Secrets Manager ARNs — are looked up live from AWS on every run (via the
-   workflow's existing OIDC role, which has read-only
-   `cloudformation:DescribeStacks`/`DescribeStackResource` and
-   `secretsmanager:DescribeSecret` for exactly this), so there's nothing to
-   go stale or re-copy even if the infra is torn down and rebuilt with all
-   new random suffixes. If a lookup ever comes back empty, the workflow
-   fails loudly at that step instead of silently rendering a broken
-   `taskdef.json`.
+3. **`ecs/taskdef.json` is a real, committed file — edit it directly when
+   infra changes.** Every ARN in it (execution/task role, DB credentials
+   secret, the SSM parameters for the CloudFront domain / DB endpoint /
+   Django secret key) follows this account's deterministic
+   `photo-gallery-dev-*` naming convention, so it never needs templating -
+   see `templates/bootstrap.yaml`'s Description and the SSM parameters in
+   `03-storage-cdn.yaml`/`04-database.yaml` in the infra repo for where each
+   value comes from. `build-and-push.yml` only patches the `image` field
+   (via `jq`) with the digest it just pushed, since that's the one thing
+   that legitimately changes on every build; everything else resolves from
+   Parameter Store/Secrets Manager at container launch, straight off the
+   ARNs already in the file.
 
-   `<IMAGE1_NAME>` in the template (and `<TASK_DEFINITION>` in
-   `appspec.yaml`) are **not** placeholders to fill in — `envsubst` only
-   touches `$VAR`/`${VAR}` syntax, so these angle-bracket tokens pass
-   through untouched for CodeDeploy to substitute itself at deploy time.
-   Leave them exactly as-is.
+   If the infra is ever torn down and respun into a **different** AWS
+   account or region, update the literal ARNs in `ecs/taskdef.json` to
+   match - they won't re-resolve themselves.
 
-3. Push both files to `main`. The pipeline will pick up `ecs/taskdef.json`
-   and `ecs/appspec.yaml` on its next run.
+4. Push to `main`. The workflow will build (running flake8/pytest as a
+   Dockerfile build stage), push, patch, and deploy on its own from here.
 
 ## How a deploy happens
 
 ```
 git push origin main
   -> GitHub Actions (OIDC, no long-lived keys)
-     -> test (flake8 + pytest)
-     -> docker build -> push to ECR (tags: <git-sha>, latest)
+     -> docker build (flake8 + pytest run as a build stage - fails the
+                       build, and the push, if either fails)
+        -> push to ECR (tags: <git-sha>, latest)
         -> EventBridge rule (in infra repo) fires on the "latest" push
            -> CodePipeline starts
               -> pulls ecs/taskdef.json + ecs/appspec.yaml from this repo

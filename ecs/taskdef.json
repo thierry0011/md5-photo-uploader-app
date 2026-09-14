@@ -1,0 +1,48 @@
+{
+  "family": "photo-gallery-dev-app",
+  "networkMode": "awsvpc",
+  "requiresCompatibilities": ["FARGATE"],
+  "cpu": "512",
+  "memory": "1024",
+  "executionRoleArn": "arn:aws:iam::711387109786:role/photo-gallery-dev-ecs-task-execution",
+  "taskRoleArn": "arn:aws:iam::711387109786:role/photo-gallery-dev-ecs-task-role",
+  "runtimePlatform": {
+    "cpuArchitecture": "X86_64",
+    "operatingSystemFamily": "LINUX"
+  },
+  "containerDefinitions": [
+    {
+      "name": "app",
+      "image": "REPLACED_AT_DEPLOY_TIME",
+      "essential": true,
+      "portMappings": [
+        {
+          "containerPort": 8000,
+          "protocol": "tcp"
+        }
+      ],
+      "environment": [
+        { "name": "DJANGO_ALLOWED_HOSTS", "value": "*" },
+        { "name": "AWS_STORAGE_BUCKET_NAME", "value": "photo-gallery-dev-images-711387109786" },
+        { "name": "AWS_REGION", "value": "us-east-1" },
+        { "name": "POSTGRES_PORT", "value": "5432" },
+        { "name": "POSTGRES_DB", "value": "photogallery" }
+      ],
+      "secrets": [
+        { "name": "POSTGRES_USER", "valueFrom": "photo-gallery-dev-db-credentials:username::" },
+        { "name": "POSTGRES_PASSWORD", "valueFrom": "photo-gallery-dev-db-credentials:password::" },
+        { "name": "DJANGO_SECRET_KEY", "valueFrom": "arn:aws:ssm:us-east-1:711387109786:parameter/photo-gallery-dev-django-secret-key" },
+        { "name": "AWS_CLOUDFRONT_DOMAIN", "valueFrom": "arn:aws:ssm:us-east-1:711387109786:parameter/photo-gallery-dev-cloudfront-domain" },
+        { "name": "POSTGRES_HOST", "valueFrom": "arn:aws:ssm:us-east-1:711387109786:parameter/photo-gallery-dev-db-endpoint-address" }
+      ],
+      "logConfiguration": {
+        "logDriver": "awslogs",
+        "options": {
+          "awslogs-group": "/ecs/photo-gallery-dev",
+          "awslogs-region": "us-east-1",
+          "awslogs-stream-prefix": "app"
+        }
+      }
+    }
+  ]
+}

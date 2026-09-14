@@ -13,6 +13,17 @@ RUN pip install --no-cache-dir --prefix=/install -r requirements.txt
 
 # ---------------------------------------------------------------------------
 
+FROM builder AS test
+
+COPY requirements-dev.txt .
+RUN pip install --no-cache-dir -r requirements-dev.txt
+COPY . .
+RUN flake8 .
+RUN DJANGO_TESTING=true DJANGO_SECRET_KEY=ci pytest -v
+RUN touch /tests-passed
+
+# ---------------------------------------------------------------------------
+
 FROM python:3.13-slim AS runtime
 
 RUN apt-get update \
@@ -25,6 +36,10 @@ COPY --from=builder /install /usr/local
 
 WORKDIR /app
 COPY . .
+
+# Forces the test stage to pass first - a failed flake8/pytest run fails this COPY, and the whole build
+COPY --from=test /tests-passed /tmp/tests-passed
+RUN find . -name "tests.py" -delete
 
 # collectstatic needs no live DB/AWS credentials, just settings that import cleanly.
 RUN DJANGO_SECRET_KEY=build-time-only python manage.py collectstatic --noinput

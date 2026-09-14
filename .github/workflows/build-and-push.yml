@@ -12,39 +12,13 @@ permissions:
   contents: read
 
 env:
-  AWS_REGION: us-east-1
-  # ARN output by the infra repo's 06-github-oidc.yaml stack.
-  AWS_ROLE_ARN: arn:aws:iam::711387109786:role/photo-gallery-dev-github-actions-ecr-push
-  ECR_REPOSITORY: photo-gallery-dev-app
-  ROOT_STACK_NAME: photo-gallery-dev-root
-  DB_CREDENTIALS_SECRET_NAME: photo-gallery-dev-db-credentials
-  DJANGO_SECRET_KEY_PARAM_NAME: photo-gallery-dev-django-secret-key
-  ARTIFACT_KEY: source/appspec-taskdef.zip
-  TASK_EXECUTION_ROLE_ARN: arn:aws:iam::711387109786:role/photo-gallery-dev-ecs-task-execution
-  TASK_ROLE_ARN: arn:aws:iam::711387109786:role/photo-gallery-dev-ecs-task-role
-  IMAGES_BUCKET_NAME: photo-gallery-dev-images-711387109786
+  AWS_REGION: ${{ vars.AWS_REGION }}
+  ECR_REPOSITORY: ${{ vars.ECR_REPOSITORY }}
+  ARTIFACT_KEY: ${{ vars.ARTIFACT_KEY }}
+  ARTIFACT_BUCKET: ${{ vars.ARTIFACT_BUCKET }}
 
 jobs:
-  test:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.13"
-          cache: pip
-
-      - run: pip install -r requirements-dev.txt
-
-      - run: flake8 .
-
-      - run: DJANGO_SECRET_KEY=ci python manage.py collectstatic --noinput
-
-      - run: DJANGO_TESTING=true DJANGO_SECRET_KEY=ci pytest -v
-
   build-and-push:
-    needs: test
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -52,61 +26,14 @@ jobs:
       - name: Configure AWS credentials via OIDC
         uses: aws-actions/configure-aws-credentials@v4
         with:
-          role-to-assume: ${{ env.AWS_ROLE_ARN }}
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
           aws-region: ${{ env.AWS_REGION }}
 
       - name: Log in to Amazon ECR
         id: ecr-login
         uses: aws-actions/amazon-ecr-login@v2
 
-      - name: Look up live infra values
-        run: |
-          set -euo pipefail
-
-          cloudfront_domain=$(aws cloudformation describe-stacks \
-            --stack-name "$ROOT_STACK_NAME" \
-            --query "Stacks[0].Outputs[?OutputKey=='CloudFrontDomainName'].OutputValue" \
-            --output text)
-
-          artifact_bucket=$(aws cloudformation describe-stacks \
-            --stack-name "$ROOT_STACK_NAME" \
-            --query "Stacks[0].Outputs[?OutputKey=='PipelineArtifactBucketName'].OutputValue" \
-            --output text)
-
-          db_stack_arn=$(aws cloudformation describe-stack-resource \
-            --stack-name "$ROOT_STACK_NAME" --logical-resource-id DatabaseStack \
-            --query "StackResourceDetail.PhysicalResourceId" --output text)
-          db_endpoint=$(aws cloudformation describe-stacks \
-            --stack-name "$db_stack_arn" \
-            --query "Stacks[0].Outputs[?OutputKey=='DBInstanceEndpointAddress'].OutputValue" \
-            --output text)
-
-          db_secret_arn=$(aws secretsmanager describe-secret \
-            --secret-id "$DB_CREDENTIALS_SECRET_NAME" --query ARN --output text)
-          # SecureString in Parameter Store, not Secrets Manager - see
-          # 07-ecs-alb.yaml's TaskExecutionRole for why. get-parameter here
-          # only reads metadata (the ARN), no --with-decryption, so this
-          # role never touches the actual secret value.
-          django_secret_arn=$(aws ssm get-parameter \
-            --name "$DJANGO_SECRET_KEY_PARAM_NAME" --query Parameter.ARN --output text)
-
-          for name_value in "CloudFrontDomainName=$cloudfront_domain" "PipelineArtifactBucketName=$artifact_bucket" \
-                             "DBEndpointAddress=$db_endpoint" "DBCredentialsSecretArn=$db_secret_arn" \
-                             "DjangoSecretKeyArn=$django_secret_arn"; do
-            name="${name_value%%=*}"
-            value="${name_value#*=}"
-            if [ -z "$value" ] || [ "$value" = "None" ]; then
-              echo "::error::Looked-up value for $name came back empty - refusing to render a broken taskdef.json."
-              exit 1
-            fi
-          done
-
-          echo "CLOUDFRONT_DOMAIN_NAME=$cloudfront_domain" >> "$GITHUB_ENV"
-          echo "ARTIFACT_BUCKET=$artifact_bucket" >> "$GITHUB_ENV"
-          echo "DB_ENDPOINT_ADDRESS=$db_endpoint" >> "$GITHUB_ENV"
-          echo "DB_CREDENTIALS_SECRET_ARN=$db_secret_arn" >> "$GITHUB_ENV"
-          echo "DJANGO_SECRET_KEY_ARN=$django_secret_arn" >> "$GITHUB_ENV"
-
+      # flake8/pytest run as a Dockerfile build stage (`test`); a failing test fails this build
       - name: Build and push image
         env:
           REGISTRY: ${{ steps.ecr-login.outputs.registry }}
@@ -114,13 +41,7 @@ jobs:
           docker build -t "$REGISTRY/$ECR_REPOSITORY:latest" .
           docker push "$REGISTRY/$ECR_REPOSITORY:latest"
 
-      # ':latest' is mutable by design (kept for convenience, e.g. manual
-      # `docker pull`), so it's never what actually gets deployed. Instead,
-      # once the push above lands, ask ECR what digest 'latest' resolved to
-      # *this run* and bake that fixed digest into the task definition -
-      # every task launched from the resulting revision (initial rollout,
-      # later autoscaling, crash-replacement) pulls these exact bytes,
-      # regardless of what 'latest' is repointed to afterward.
+      # Resolve the digest ':latest' just pushed to, so the deploy artifact pins a fixed image
       - name: Resolve pushed image digest
         env:
           REGISTRY: ${{ steps.ecr-login.outputs.registry }}
@@ -132,19 +53,16 @@ jobs:
             --query 'imageDetails[0].imageDigest' --output text)
           echo "IMAGE_URI=${REGISTRY}/${ECR_REPOSITORY}@${image_digest}" >> "$GITHUB_ENV"
 
-      - name: Render deploy artifact (taskdef.json + appspec.yaml)
+      # taskdef.json's ARNs are static (deterministic naming); only the image needs runtime substitution
+      - name: Render deploy artifact (inject image URI)
         run: |
-          sudo apt-get update -qq && sudo apt-get install -y -qq gettext-base
           mkdir -p dist
-          envsubst < ecs/taskdef.template.json > dist/taskdef.json
+          jq --arg image "$IMAGE_URI" '.containerDefinitions[0].image = $image' \
+            ecs/taskdef.json > dist/taskdef.json
           cp ecs/appspec.yaml dist/appspec.yaml
           cd dist && zip -r ../appspec-taskdef.zip taskdef.json appspec.yaml
 
-      # This is the actual deploy trigger: 09-cicd-pipeline.yaml's
-      # EventBridge rule starts CodePipeline off this S3 write, not off the
-      # ECR push above - by the time this object lands, the image it
-      # references is already fully pushed, so the pipeline can never read
-      # a deploy artifact whose image isn't there yet.
+      # This S3 upload (not the ECR push) is the actual deploy trigger for 09-cicd-pipeline.yaml's EventBridge rule
       - name: Upload deploy artifact to S3
         run: |
           aws s3 cp appspec-taskdef.zip "s3://${ARTIFACT_BUCKET}/${ARTIFACT_KEY}"
