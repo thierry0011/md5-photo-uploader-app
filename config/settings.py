@@ -131,6 +131,12 @@ if TESTING:
         "BACKEND": "django.core.files.storage.FileSystemStorage",
         "OPTIONS": {"location": "/tmp/photo-gallery-test-media"},
     }
+    # CompressedManifestStaticFilesStorage requires staticfiles.json from
+    # collectstatic, which only runs in the Dockerfile's runtime stage - the
+    # test stage renders templates with {% static %} tags before that exists.
+    STORAGES["staticfiles"] = {
+        "BACKEND": "django.contrib.staticfiles.storage.StaticFilesStorage",
+    }
 elif not AWS_STORAGE_BUCKET_NAME:
     # Local development without an S3 bucket configured: fall back to disk.
     STORAGES["default"] = {"BACKEND": "django.core.files.storage.FileSystemStorage"}
