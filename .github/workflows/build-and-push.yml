@@ -33,41 +33,29 @@ jobs:
         id: ecr-login
         uses: aws-actions/amazon-ecr-login@v2
 
-      # flake8/pytest run as a Dockerfile build stage (`test`); a failing test fails this build
-      - name: Build and push image
+      - name: Build image
         env:
           REGISTRY: ${{ steps.ecr-login.outputs.registry }}
         run: |
           docker build -t "$REGISTRY/$ECR_REPOSITORY:latest" .
-          docker push "$REGISTRY/$ECR_REPOSITORY:latest"
 
-      # Resolve the digest ':latest' just pushed to, so the deploy artifact pins a fixed image
-      - name: Resolve pushed image digest
+      - name: Upload deploy template to S3
+        run: |
+          mkdir -p dist
+          cp ecs/taskdef.json ecs/appspec.yaml dist/
+          cd dist && zip -r ../appspec-taskdef.zip taskdef.json appspec.yaml
+          cd ..
+          aws s3 cp appspec-taskdef.zip "s3://${ARTIFACT_BUCKET}/${ARTIFACT_KEY}"
+
+      - name: Push image
         env:
           REGISTRY: ${{ steps.ecr-login.outputs.registry }}
         run: |
-          set -euo pipefail
-          image_digest=$(aws ecr describe-images \
-            --repository-name "$ECR_REPOSITORY" \
-            --image-ids imageTag=latest \
-            --query 'imageDetails[0].imageDigest' --output text)
-          echo "IMAGE_URI=${REGISTRY}/${ECR_REPOSITORY}@${image_digest}" >> "$GITHUB_ENV"
-
-      # taskdef.json's ARNs are static (deterministic naming); only the image needs runtime substitution
-      - name: Render deploy artifact (inject image URI)
-        run: |
-          mkdir -p dist
-          jq --arg image "$IMAGE_URI" '.containerDefinitions[0].image = $image' \
-            ecs/taskdef.json > dist/taskdef.json
-          cp ecs/appspec.yaml dist/appspec.yaml
-          cd dist && zip -r ../appspec-taskdef.zip taskdef.json appspec.yaml
-
-      # This S3 upload (not the ECR push) is the actual deploy trigger for 09-cicd-pipeline.yaml's EventBridge rule
-      - name: Upload deploy artifact to S3
-        run: |
-          aws s3 cp appspec-taskdef.zip "s3://${ARTIFACT_BUCKET}/${ARTIFACT_KEY}"
+          docker push "$REGISTRY/$ECR_REPOSITORY:latest"
 
       - name: Summary
+        env:
+          REGISTRY: ${{ steps.ecr-login.outputs.registry }}
         run: |
-          echo "Deployed image: ${IMAGE_URI}" >> "$GITHUB_STEP_SUMMARY"
-          echo "This S3 upload triggers EventBridge -> CodePipeline -> CodeDeploy blue/green deployment." >> "$GITHUB_STEP_SUMMARY"
+          echo "Pushed: ${REGISTRY}/${ECR_REPOSITORY}:latest" >> "$GITHUB_STEP_SUMMARY"
+          echo "This push triggers EventBridge -> CodePipeline -> CodeDeploy blue/green deployment." >> "$GITHUB_STEP_SUMMARY"

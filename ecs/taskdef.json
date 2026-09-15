@@ -13,7 +13,7 @@
   "containerDefinitions": [
     {
       "name": "app",
-      "image": "REPLACED_AT_DEPLOY_TIME",
+      "image": "<IMAGE1_NAME>",
       "essential": true,
       "portMappings": [
         {
