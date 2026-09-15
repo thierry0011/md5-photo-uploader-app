@@ -29,8 +29,8 @@
         { "name": "POSTGRES_DB", "value": "photogallery" }
       ],
       "secrets": [
-        { "name": "POSTGRES_USER", "valueFrom": "photo-gallery-dev-db-credentials:username::" },
-        { "name": "POSTGRES_PASSWORD", "valueFrom": "photo-gallery-dev-db-credentials:password::" },
+        { "name": "POSTGRES_USER", "valueFrom": "arn:aws:secretsmanager:us-east-1:711387109786:secret:photo-gallery-dev-db-credentials-0Rj1Ym:username::" },
+        { "name": "POSTGRES_PASSWORD", "valueFrom": "arn:aws:secretsmanager:us-east-1:711387109786:secret:photo-gallery-dev-db-credentials-0Rj1Ym:password::" },
         { "name": "DJANGO_SECRET_KEY", "valueFrom": "arn:aws:ssm:us-east-1:711387109786:parameter/photo-gallery-dev-django-secret-key" },
         { "name": "AWS_CLOUDFRONT_DOMAIN", "valueFrom": "arn:aws:ssm:us-east-1:711387109786:parameter/photo-gallery-dev-cloudfront-domain" },
         { "name": "POSTGRES_HOST", "valueFrom": "arn:aws:ssm:us-east-1:711387109786:parameter/photo-gallery-dev-db-endpoint-address" }
